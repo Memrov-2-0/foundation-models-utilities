@@ -435,9 +435,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           choice?.finishReason != nil || choice?.nativeFinishReason != nil
 
         responseMetadata[MetadataKey.generationID] = chunk.id
-        if let selectedModel = chunk.model {
-          responseMetadata[MetadataKey.selectedModel] = selectedModel
-        }
+        responseMetadata[MetadataKey.selectedModel] = chunk.model
         if let routerMetadata = chunk.openRouterMetadata {
           responseMetadata[MetadataKey.routerMetadata] = routerMetadata
         }
