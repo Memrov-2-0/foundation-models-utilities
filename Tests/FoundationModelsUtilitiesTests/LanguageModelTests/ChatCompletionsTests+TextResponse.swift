@@ -42,5 +42,57 @@ extension ChatCompletionsTests {
       let prompts = session.transcript.compactMap(\.prompt)
       #expect(prompts.count == 2)
     }
+
+    @Test func `preserves provider-selected model in response metadata`() async throws {
+      MockSSEProtocol.handler = { _ in
+        (
+          200,
+          Data(
+            """
+            data: {"id":"1","model":"provider/model-v2","choices":[{"delta":{"content":"Hello"}}]}
+
+            data: [DONE]
+
+            """.utf8
+          )
+        )
+      }
+
+      let session = LanguageModelSession(model: makeMockModel(name: "router/auto"))
+      _ = try await session.respond(to: "Hello")
+
+      let response = try #require(session.transcript.compactMap(\.response).last)
+      #expect(
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.selectedModel]
+          as? String == "provider/model-v2"
+      )
+    }
+
+    @Test func `preserves URL citations in response metadata`() async throws {
+      MockSSEProtocol.handler = { _ in
+        (
+          200,
+          Data(
+            """
+            data: {"id":"1","model":"provider/model-v2","choices":[{"delta":{"content":"Current answer","annotations":[{"type":"url_citation","url_citation":{"url":"https://example.com/source","title":"Example Source","content":"Supporting text","start_index":0,"end_index":14}}]}}]}
+
+            data: [DONE]
+
+            """.utf8
+          )
+        )
+      }
+
+      let session = LanguageModelSession(model: makeMockModel())
+      _ = try await session.respond(to: "What changed?")
+
+      let response = try #require(session.transcript.compactMap(\.response).last)
+      let citations =
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.urlCitations]
+        as? [ChatCompletionsLanguageModel.URLCitation]
+      #expect(citations?.count == 1)
+      #expect(citations?.first?.url == "https://example.com/source")
+      #expect(citations?.first?.title == "Example Source")
+    }
   }
 }

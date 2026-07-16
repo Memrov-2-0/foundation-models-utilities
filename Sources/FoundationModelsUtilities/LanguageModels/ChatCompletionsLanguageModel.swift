@@ -37,6 +37,36 @@ private import UniformTypeIdentifiers
 /// let response = try await session.respond(to: "Hello!")
 /// ```
 public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
+  /// Metadata keys used when provider-specific response details are attached
+  /// to a Foundation Models transcript response.
+  public enum MetadataKey {
+    public static let selectedModel = "chatCompletions.selectedModel"
+    public static let urlCitations = "chatCompletions.urlCitations"
+  }
+
+  /// A source citation returned by a chat-completions provider.
+  public struct URLCitation: Codable, Equatable, Hashable, Sendable {
+    public var url: String
+    public var title: String?
+    public var content: String?
+    public var startIndex: Int?
+    public var endIndex: Int?
+
+    public init(
+      url: String,
+      title: String? = nil,
+      content: String? = nil,
+      startIndex: Int? = nil,
+      endIndex: Int? = nil
+    ) {
+      self.url = url
+      self.title = title
+      self.content = content
+      self.startIndex = startIndex
+      self.endIndex = endIndex
+    }
+  }
+
   /// A server-managed tool understood by the chat-completions provider.
   ///
   /// Unlike Foundation Models ``Tool`` values, server tools execute inside
@@ -68,6 +98,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// Server-managed tools included alongside any Foundation Models tools.
   public var serverTools: [ServerTool]
 
+  /// A stable provider session identifier used for routing continuity.
+  public var sessionID: String?
+
   // Overridden in tests to inject a URLSession with mock protocol handlers.
   var urlSession: URLSession?
 
@@ -91,6 +124,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     additionalHeaders: [String: String] = [:],
     supportsGuidedGeneration: Bool = true,
     serverTools: [ServerTool] = [],
+    sessionID: String? = nil,
     urlSessionConfiguration: URLSessionConfiguration? = nil
   ) {
     self.name = name
@@ -98,6 +132,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     self.additionalHeaders = additionalHeaders
     self.supportsGuidedGeneration = supportsGuidedGeneration
     self.serverTools = serverTools
+    self.sessionID = sessionID
     self.urlSession = urlSessionConfiguration.map { URLSession(configuration: $0) }
   }
 
@@ -116,6 +151,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       url: url,
       additionalHeaders: additionalHeaders,
       serverTools: serverTools,
+      sessionID: sessionID,
       urlSession: urlSession
     )
   }
@@ -215,6 +251,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       fileprivate let url: URL
       fileprivate let additionalHeaders: [String: String]
       fileprivate let serverTools: [ServerTool]
+      fileprivate let sessionID: String?
       fileprivate let urlSession: URLSession?
 
       public static func == (lhs: Configuration, rhs: Configuration) -> Bool {
@@ -222,6 +259,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           && lhs.url == rhs.url
           && lhs.additionalHeaders == rhs.additionalHeaders
           && lhs.serverTools == rhs.serverTools
+          && lhs.sessionID == rhs.sessionID
       }
 
       public func hash(into hasher: inout Hasher) {
@@ -229,6 +267,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         hasher.combine(url)
         hasher.combine(additionalHeaders)
         hasher.combine(serverTools)
+        hasher.combine(sessionID)
       }
     }
 
@@ -288,7 +327,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               schema: schema
             )
           )
-        }
+        },
+        sessionID: configuration.sessionID
       )
 
       // Stream the response back into the framework via `channel`.
@@ -316,9 +356,22 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       let responseEntryID = UUID().uuidString
       let reasoningEntryID = UUID().uuidString
       let toolCallsEntryID = UUID().uuidString
+      var selectedModel: String?
+      var lastReportedModel: String?
+      var citations = [URLCitation]()
+      var reportedCitationCount = 0
 
       for try await chunk in chunks {
+        selectedModel = chunk.model
+
         if let delta = chunk.choices.first?.delta {
+          let newCitations = (delta.annotations ?? []).compactMap(\.urlCitation)
+          if !newCitations.isEmpty {
+            for citation in newCitations where !citations.contains(citation) {
+              citations.append(citation)
+            }
+          }
+
           if let reasoning = delta.reasoningContent {
             await channel.send(
               .reasoning(
@@ -354,6 +407,24 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               )
             }
           } else if let text = delta.content {
+            if lastReportedModel != selectedModel, let selectedModel {
+              await channel.send(
+                .response(
+                  entryID: responseEntryID,
+                  action: .updateMetadata([MetadataKey.selectedModel: selectedModel])
+                )
+              )
+              lastReportedModel = selectedModel
+            }
+            if reportedCitationCount != citations.count {
+              await channel.send(
+                .response(
+                  entryID: responseEntryID,
+                  action: .updateMetadata([MetadataKey.urlCitations: citations])
+                )
+              )
+              reportedCitationCount = citations.count
+            }
             await channel.send(
               .response(
                 entryID: responseEntryID,
@@ -366,6 +437,24 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         // Send usage AFTER content so the authoritative cumulative total
         // overwrites any tokens credited by `appendText` for this chunk.
         if let usage = chunk.usage {
+          if lastReportedModel != selectedModel, let selectedModel {
+            await channel.send(
+              .response(
+                entryID: responseEntryID,
+                action: .updateMetadata([MetadataKey.selectedModel: selectedModel])
+              )
+            )
+            lastReportedModel = selectedModel
+          }
+          if reportedCitationCount != citations.count {
+            await channel.send(
+              .response(
+                entryID: responseEntryID,
+                action: .updateMetadata([MetadataKey.urlCitations: citations])
+              )
+            )
+            reportedCitationCount = citations.count
+          }
           await channel.send(
             .response(
               entryID: responseEntryID,
@@ -445,7 +534,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               throw LanguageModelError.unsupportedTranscriptContent(
                 LanguageModelError.UnsupportedTranscriptContent(
                   unsupportedContent: [entry],
-                  debugDescription: "Image attachment without a URL is not supported by \(Self.self) on this platform."
+                  debugDescription:
+                    "Image attachment without a URL is not supported by \(Self.self) on this platform."
                 )
               )
             }
@@ -733,6 +823,7 @@ private struct ChatCompletionsClient {
     var tools: [Tool]?
     var toolChoice: ChatCompletionRequest.ToolChoice?
     var responseFormat: ResponseFormat?
+    var sessionID: String?
     var stream = true
     var streamOptions = StreamOptions(includeUsage: true)
 
@@ -752,6 +843,7 @@ private struct ChatCompletionsClient {
       case maxCompletionTokens = "max_completion_tokens"
       case tools
       case responseFormat = "response_format"
+      case sessionID = "session_id"
       case stream
       case streamOptions = "stream_options"
       case toolChoice = "tool_choice"
@@ -877,13 +969,25 @@ private struct ChatCompletionsClient {
         var content: String?
         var reasoningContent: String?
         var toolCalls: [ToolCallDelta]?
+        var annotations: [Annotation]?
 
         enum CodingKeys: String, CodingKey {
           case role
           case content
           case reasoningContent = "reasoning_content"
           case toolCalls = "tool_calls"
+          case annotations
         }
+      }
+    }
+
+    struct Annotation: Decodable {
+      let type: String
+      let urlCitation: ChatCompletionsLanguageModel.URLCitation?
+
+      private enum CodingKeys: String, CodingKey {
+        case type
+        case urlCitation = "url_citation"
       }
     }
 

@@ -47,6 +47,18 @@ extension ChatCompletionsTests {
       #expect(body["model"] as? String == "foo-mini")
     }
 
+    @Test func `sends provider session identifier in request body`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
+
+      let session = LanguageModelSession(
+        model: makeMockModel(sessionID: "conversation-123")
+      )
+      _ = try await session.respond(to: "test")
+
+      let body = try requestBody()
+      #expect(body["session_id"] as? String == "conversation-123")
+    }
+
     @Test func `enables streaming in request`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 
