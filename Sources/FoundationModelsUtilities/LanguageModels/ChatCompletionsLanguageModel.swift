@@ -42,6 +42,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   public enum MetadataKey {
     public static let selectedModel = "chatCompletions.selectedModel"
     public static let urlCitations = "chatCompletions.urlCitations"
+    public static let generationID = "chatCompletions.generationID"
+    public static let finishReason = "chatCompletions.finishReason"
+    public static let nativeFinishReason = "chatCompletions.nativeFinishReason"
+    public static let routerMetadata = "chatCompletions.routerMetadata"
   }
 
   /// A source citation returned by a chat-completions provider.
@@ -79,6 +83,61 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     }
   }
 
+  /// A provider-managed plugin that runs once for a chat-completions request.
+  public struct Plugin: Codable, Hashable, Sendable {
+    public var id: String
+    public var enabled: Bool?
+
+    public init(id: String, enabled: Bool? = nil) {
+      self.id = id
+      self.enabled = enabled
+    }
+  }
+
+  /// Routing information returned by compatible chat-completions providers.
+  public struct RouterMetadata: Codable, Equatable, Hashable, Sendable {
+    public struct PipelineStage: Codable, Equatable, Hashable, Sendable {
+      public var type: String?
+      public var name: String
+
+      public init(type: String? = nil, name: String) {
+        self.type = type
+        self.name = name
+      }
+    }
+
+    public var requested: String?
+    public var strategy: String?
+    public var region: String?
+    public var summary: String?
+    public var attempt: Int?
+    public var isBYOK: Bool?
+    public var pipeline: [PipelineStage]
+
+    public init(
+      requested: String? = nil,
+      strategy: String? = nil,
+      region: String? = nil,
+      summary: String? = nil,
+      attempt: Int? = nil,
+      isBYOK: Bool? = nil,
+      pipeline: [PipelineStage] = []
+    ) {
+      self.requested = requested
+      self.strategy = strategy
+      self.region = region
+      self.summary = summary
+      self.attempt = attempt
+      self.isBYOK = isBYOK
+      self.pipeline = pipeline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case requested, strategy, region, summary, attempt, pipeline
+      case isBYOK = "is_byok"
+    }
+  }
+
   /// The name of the underlying model, sent in the `model` field of each
   /// chat completion request.
   public var name: String
@@ -97,6 +156,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
   /// Server-managed tools included alongside any Foundation Models tools.
   public var serverTools: [ServerTool]
+
+  /// Provider-managed plugins included in each chat-completions request.
+  public var plugins: [Plugin]
 
   /// A stable provider session identifier used for routing continuity.
   public var sessionID: String?
@@ -124,6 +186,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     additionalHeaders: [String: String] = [:],
     supportsGuidedGeneration: Bool = true,
     serverTools: [ServerTool] = [],
+    plugins: [Plugin] = [],
     sessionID: String? = nil,
     urlSessionConfiguration: URLSessionConfiguration? = nil
   ) {
@@ -132,6 +195,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     self.additionalHeaders = additionalHeaders
     self.supportsGuidedGeneration = supportsGuidedGeneration
     self.serverTools = serverTools
+    self.plugins = plugins
     self.sessionID = sessionID
     self.urlSession = urlSessionConfiguration.map { URLSession(configuration: $0) }
   }
@@ -151,6 +215,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       url: url,
       additionalHeaders: additionalHeaders,
       serverTools: serverTools,
+      plugins: plugins,
       sessionID: sessionID,
       urlSession: urlSession
     )
@@ -251,6 +316,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       fileprivate let url: URL
       fileprivate let additionalHeaders: [String: String]
       fileprivate let serverTools: [ServerTool]
+      fileprivate let plugins: [Plugin]
       fileprivate let sessionID: String?
       fileprivate let urlSession: URLSession?
 
@@ -259,6 +325,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           && lhs.url == rhs.url
           && lhs.additionalHeaders == rhs.additionalHeaders
           && lhs.serverTools == rhs.serverTools
+          && lhs.plugins == rhs.plugins
           && lhs.sessionID == rhs.sessionID
       }
 
@@ -267,6 +334,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         hasher.combine(url)
         hasher.combine(additionalHeaders)
         hasher.combine(serverTools)
+        hasher.combine(plugins)
         hasher.combine(sessionID)
       }
     }
@@ -328,6 +396,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             )
           )
         },
+        plugins: configuration.plugins.isEmpty ? nil : configuration.plugins,
         sessionID: configuration.sessionID
       )
 
@@ -360,9 +429,59 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       var lastReportedModel: String?
       var citations = [URLCitation]()
       var reportedCitationCount = 0
+      var lastReportedGenerationID: String?
+      var lastReportedFinishReason: String?
+      var lastReportedNativeFinishReason: String?
+      var lastReportedRouterMetadata: RouterMetadata?
 
       for try await chunk in chunks {
         selectedModel = chunk.model
+
+        if lastReportedGenerationID != chunk.id {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .updateMetadata([MetadataKey.generationID: chunk.id])
+            )
+          )
+          lastReportedGenerationID = chunk.id
+        }
+
+        if let routerMetadata = chunk.openRouterMetadata,
+          routerMetadata != lastReportedRouterMetadata
+        {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .updateMetadata([MetadataKey.routerMetadata: routerMetadata])
+            )
+          )
+          lastReportedRouterMetadata = routerMetadata
+        }
+
+        if let finishReason = chunk.choices.first?.finishReason,
+          finishReason != lastReportedFinishReason
+        {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .updateMetadata([MetadataKey.finishReason: finishReason])
+            )
+          )
+          lastReportedFinishReason = finishReason
+        }
+
+        if let nativeFinishReason = chunk.choices.first?.nativeFinishReason,
+          nativeFinishReason != lastReportedNativeFinishReason
+        {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .updateMetadata([MetadataKey.nativeFinishReason: nativeFinishReason])
+            )
+          )
+          lastReportedNativeFinishReason = nativeFinishReason
+        }
 
         if let delta = chunk.choices.first?.delta {
           let newCitations = (delta.annotations ?? []).compactMap(\.urlCitation)
@@ -823,6 +942,7 @@ private struct ChatCompletionsClient {
     var tools: [Tool]?
     var toolChoice: ChatCompletionRequest.ToolChoice?
     var responseFormat: ResponseFormat?
+    var plugins: [ChatCompletionsLanguageModel.Plugin]?
     var sessionID: String?
     var stream = true
     var streamOptions = StreamOptions(includeUsage: true)
@@ -843,6 +963,7 @@ private struct ChatCompletionsClient {
       case maxCompletionTokens = "max_completion_tokens"
       case tools
       case responseFormat = "response_format"
+      case plugins
       case sessionID = "session_id"
       case stream
       case streamOptions = "stream_options"
@@ -960,9 +1081,23 @@ private struct ChatCompletionsClient {
     let model: String
     let choices: [Choice]
     let usage: Usage?
+    let openRouterMetadata: ChatCompletionsLanguageModel.RouterMetadata?
+
+    private enum CodingKeys: String, CodingKey {
+      case id, model, choices, usage
+      case openRouterMetadata = "openrouter_metadata"
+    }
 
     struct Choice: Decodable {
       let delta: Delta
+      let finishReason: String?
+      let nativeFinishReason: String?
+
+      private enum CodingKeys: String, CodingKey {
+        case delta
+        case finishReason = "finish_reason"
+        case nativeFinishReason = "native_finish_reason"
+      }
 
       struct Delta: Decodable {
         var role: String?
