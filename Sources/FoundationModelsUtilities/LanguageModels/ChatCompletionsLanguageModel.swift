@@ -425,69 +425,45 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       let responseEntryID = UUID().uuidString
       let reasoningEntryID = UUID().uuidString
       let toolCallsEntryID = UUID().uuidString
-      var selectedModel: String?
-      var lastReportedModel: String?
       var citations = [URLCitation]()
-      var reportedCitationCount = 0
-      var lastReportedGenerationID: String?
-      var lastReportedFinishReason: String?
-      var lastReportedNativeFinishReason: String?
-      var lastReportedRouterMetadata: RouterMetadata?
+      var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
 
       for try await chunk in chunks {
-        selectedModel = chunk.model
         let choice = chunk.choices.first
         let responseText = choice?.delta.content
         let hasTerminalResponseMetadata =
           choice?.finishReason != nil || choice?.nativeFinishReason != nil
 
-        if (responseText != nil || hasTerminalResponseMetadata),
-          lastReportedGenerationID != chunk.id
-        {
-          await channel.send(
-            .response(
-              entryID: responseEntryID,
-              action: .updateMetadata([MetadataKey.generationID: chunk.id])
-            )
-          )
-          lastReportedGenerationID = chunk.id
+        responseMetadata[MetadataKey.generationID] = chunk.id
+        if let selectedModel = chunk.model {
+          responseMetadata[MetadataKey.selectedModel] = selectedModel
+        }
+        if let routerMetadata = chunk.openRouterMetadata {
+          responseMetadata[MetadataKey.routerMetadata] = routerMetadata
+        }
+        if let finishReason = choice?.finishReason {
+          responseMetadata[MetadataKey.finishReason] = finishReason
+        }
+        if let nativeFinishReason = choice?.nativeFinishReason {
+          responseMetadata[MetadataKey.nativeFinishReason] = nativeFinishReason
+        }
+        if let delta = choice?.delta {
+          let newCitations = (delta.annotations ?? []).compactMap(\.urlCitation)
+          for citation in newCitations where !citations.contains(citation) {
+            citations.append(citation)
+          }
+          if !citations.isEmpty {
+            responseMetadata[MetadataKey.urlCitations] = citations
+          }
         }
 
-        if (responseText != nil || hasTerminalResponseMetadata),
-          let routerMetadata = chunk.openRouterMetadata,
-          routerMetadata != lastReportedRouterMetadata
-        {
+        if responseText != nil || hasTerminalResponseMetadata {
           await channel.send(
             .response(
               entryID: responseEntryID,
-              action: .updateMetadata([MetadataKey.routerMetadata: routerMetadata])
+              action: .updateMetadata(responseMetadata)
             )
           )
-          lastReportedRouterMetadata = routerMetadata
-        }
-
-        if let finishReason = choice?.finishReason,
-          finishReason != lastReportedFinishReason
-        {
-          await channel.send(
-            .response(
-              entryID: responseEntryID,
-              action: .updateMetadata([MetadataKey.finishReason: finishReason])
-            )
-          )
-          lastReportedFinishReason = finishReason
-        }
-
-        if let nativeFinishReason = choice?.nativeFinishReason,
-          nativeFinishReason != lastReportedNativeFinishReason
-        {
-          await channel.send(
-            .response(
-              entryID: responseEntryID,
-              action: .updateMetadata([MetadataKey.nativeFinishReason: nativeFinishReason])
-            )
-          )
-          lastReportedNativeFinishReason = nativeFinishReason
         }
 
         // Foundation Models creates the transcript response entry when content
@@ -503,13 +479,6 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         }
 
         if let delta = choice?.delta {
-          let newCitations = (delta.annotations ?? []).compactMap(\.urlCitation)
-          if !newCitations.isEmpty {
-            for citation in newCitations where !citations.contains(citation) {
-              citations.append(citation)
-            }
-          }
-
           if let reasoning = delta.reasoningContent {
             await channel.send(
               .reasoning(
@@ -545,24 +514,6 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               )
             }
           } else if let text = delta.content {
-            if lastReportedModel != selectedModel, let selectedModel {
-              await channel.send(
-                .response(
-                  entryID: responseEntryID,
-                  action: .updateMetadata([MetadataKey.selectedModel: selectedModel])
-                )
-              )
-              lastReportedModel = selectedModel
-            }
-            if reportedCitationCount != citations.count {
-              await channel.send(
-                .response(
-                  entryID: responseEntryID,
-                  action: .updateMetadata([MetadataKey.urlCitations: citations])
-                )
-              )
-              reportedCitationCount = citations.count
-            }
             await channel.send(
               .response(
                 entryID: responseEntryID,
@@ -575,24 +526,6 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         // Send usage AFTER content so the authoritative cumulative total
         // overwrites any tokens credited by `appendText` for this chunk.
         if let usage = chunk.usage {
-          if lastReportedModel != selectedModel, let selectedModel {
-            await channel.send(
-              .response(
-                entryID: responseEntryID,
-                action: .updateMetadata([MetadataKey.selectedModel: selectedModel])
-              )
-            )
-            lastReportedModel = selectedModel
-          }
-          if reportedCitationCount != citations.count {
-            await channel.send(
-              .response(
-                entryID: responseEntryID,
-                action: .updateMetadata([MetadataKey.urlCitations: citations])
-              )
-            )
-            reportedCitationCount = citations.count
-          }
           await channel.send(
             .response(
               entryID: responseEntryID,
