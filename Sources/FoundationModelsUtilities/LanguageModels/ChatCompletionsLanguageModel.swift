@@ -436,8 +436,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
       for try await chunk in chunks {
         selectedModel = chunk.model
+        let choice = chunk.choices.first
+        let responseText = choice?.delta.content
+        let hasTerminalResponseMetadata =
+          choice?.finishReason != nil || choice?.nativeFinishReason != nil
 
-        if lastReportedGenerationID != chunk.id {
+        if (responseText != nil || hasTerminalResponseMetadata),
+          lastReportedGenerationID != chunk.id
+        {
           await channel.send(
             .response(
               entryID: responseEntryID,
@@ -447,7 +453,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           lastReportedGenerationID = chunk.id
         }
 
-        if let routerMetadata = chunk.openRouterMetadata,
+        if (responseText != nil || hasTerminalResponseMetadata),
+          let routerMetadata = chunk.openRouterMetadata,
           routerMetadata != lastReportedRouterMetadata
         {
           await channel.send(
@@ -459,7 +466,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           lastReportedRouterMetadata = routerMetadata
         }
 
-        if let finishReason = chunk.choices.first?.finishReason,
+        if let finishReason = choice?.finishReason,
           finishReason != lastReportedFinishReason
         {
           await channel.send(
@@ -471,7 +478,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           lastReportedFinishReason = finishReason
         }
 
-        if let nativeFinishReason = chunk.choices.first?.nativeFinishReason,
+        if let nativeFinishReason = choice?.nativeFinishReason,
           nativeFinishReason != lastReportedNativeFinishReason
         {
           await channel.send(
@@ -483,7 +490,19 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           lastReportedNativeFinishReason = nativeFinishReason
         }
 
-        if let delta = chunk.choices.first?.delta {
+        // Foundation Models creates the transcript response entry when content
+        // is appended. Terminal metadata can arrive in a content-free SSE
+        // chunk, so append an empty segment to attach it to that same entry.
+        if responseText == nil, hasTerminalResponseMetadata {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .appendText("", tokenCount: 0)
+            )
+          )
+        }
+
+        if let delta = choice?.delta {
           let newCitations = (delta.annotations ?? []).compactMap(\.urlCitation)
           if !newCitations.isEmpty {
             for citation in newCitations where !citations.contains(citation) {
@@ -598,11 +617,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       case .greedy:
         return 0
 
-      case .randomTopK:
+      case .top:
         throw ChatCompletionsLanguageModel.RequestError.invalidRequest(
           "Top K sampling is not supported"
         )
-      case .randomProbabilityThreshold(let threshold, let seed):
+      case .nucleus(let threshold, let seed):
         guard seed == nil else {
           throw ChatCompletionsLanguageModel.RequestError.invalidRequest(
             "Setting a random seed is not supported"
