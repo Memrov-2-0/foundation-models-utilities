@@ -37,6 +37,18 @@ private import UniformTypeIdentifiers
 /// let response = try await session.respond(to: "Hello!")
 /// ```
 public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
+  /// A server-managed tool understood by the chat-completions provider.
+  ///
+  /// Unlike Foundation Models ``Tool`` values, server tools execute inside
+  /// the provider and therefore only require their provider-defined type.
+  public struct ServerTool: Hashable, Sendable {
+    public var type: String
+
+    public init(type: String) {
+      self.type = type
+    }
+  }
+
   /// The name of the underlying model, sent in the `model` field of each
   /// chat completion request.
   public var name: String
@@ -52,6 +64,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   public var additionalHeaders: [String: String]
 
   public var supportsGuidedGeneration: Bool
+
+  /// Server-managed tools included alongside any Foundation Models tools.
+  public var serverTools: [ServerTool]
 
   // Overridden in tests to inject a URLSession with mock protocol handlers.
   var urlSession: URLSession?
@@ -75,12 +90,14 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     url: URL,
     additionalHeaders: [String: String] = [:],
     supportsGuidedGeneration: Bool = true,
+    serverTools: [ServerTool] = [],
     urlSessionConfiguration: URLSessionConfiguration? = nil
   ) {
     self.name = name
     self.url = url
     self.additionalHeaders = additionalHeaders
     self.supportsGuidedGeneration = supportsGuidedGeneration
+    self.serverTools = serverTools
     self.urlSession = urlSessionConfiguration.map { URLSession(configuration: $0) }
   }
 
@@ -98,6 +115,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       modelName: name,
       url: url,
       additionalHeaders: additionalHeaders,
+      serverTools: serverTools,
       urlSession: urlSession
     )
   }
@@ -196,18 +214,21 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       fileprivate let modelName: String
       fileprivate let url: URL
       fileprivate let additionalHeaders: [String: String]
+      fileprivate let serverTools: [ServerTool]
       fileprivate let urlSession: URLSession?
 
       public static func == (lhs: Configuration, rhs: Configuration) -> Bool {
         lhs.modelName == rhs.modelName
           && lhs.url == rhs.url
           && lhs.additionalHeaders == rhs.additionalHeaders
+          && lhs.serverTools == rhs.serverTools
       }
 
       public func hash(into hasher: inout Hasher) {
         hasher.combine(modelName)
         hasher.combine(url)
         hasher.combine(additionalHeaders)
+        hasher.combine(serverTools)
       }
     }
 
@@ -249,7 +270,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               parameters: tool.parameters
             )
           )
-        },
+        } + configuration.serverTools.map { ChatCompletionsClient.Tool(type: $0.type) },
         toolChoice: ChatCompletionsClient.ChatCompletionRequest.ToolChoice(
           mode: {
             switch request.generationOptions.toolCallingMode?.kind {
@@ -794,8 +815,18 @@ private struct ChatCompletionsClient {
   }
 
   struct Tool: Encodable {
-    var type: String = "function"
-    var function: Function
+    var type: String
+    var function: Function?
+
+    init(function: Function) {
+      type = "function"
+      self.function = function
+    }
+
+    init(type: String) {
+      self.type = type
+      function = nil
+    }
 
     struct Function: Encodable {
       let name: String

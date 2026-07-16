@@ -21,6 +21,22 @@ extension ChatCompletionsTests {
   @Suite struct RequestFormat {
     init() { MockSSEProtocol.reset() }
 
+    @Test func `server tools use the provider wire format`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("Done")) }
+      var model = makeMockModel()
+      model.serverTools = [.init(type: "openrouter:web_search")]
+      let session = LanguageModelSession(model: model)
+
+      _ = try await session.respond(to: "What changed today?")
+
+      let body = try requestBody()
+      let tools = try #require(body["tools"] as? [[String: Any]])
+      let serverTool = try #require(
+        tools.first { $0["type"] as? String == "openrouter:web_search" }
+      )
+      #expect(serverTool["function"] == nil)
+    }
+
     @Test func `sends model name in request body`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 

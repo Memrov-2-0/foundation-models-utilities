@@ -24,12 +24,14 @@ extension ChatCompletionsTests {
         name: "foo",
         url: url,
         additionalHeaders: ["Authorization": "Bearer test"],
-        supportsGuidedGeneration: false
+        supportsGuidedGeneration: false,
+        serverTools: [.init(type: "provider:web_search")]
       )
       #expect(model.name == "foo")
       #expect(model.url == url)
       #expect(model.additionalHeaders == ["Authorization": "Bearer test"])
       #expect(model.supportsGuidedGeneration == false)
+      #expect(model.serverTools == [.init(type: "provider:web_search")])
     }
 
     @Test func `defaults to supporting guided generation`() {
