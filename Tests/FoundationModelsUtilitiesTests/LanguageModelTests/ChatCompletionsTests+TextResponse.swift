@@ -94,5 +94,47 @@ extension ChatCompletionsTests {
       #expect(citations?.first?.url == "https://example.com/source")
       #expect(citations?.first?.title == "Example Source")
     }
+
+    @Test func `preserves generation finish and router metadata`() async throws {
+      MockSSEProtocol.handler = { _ in
+        (
+          200,
+          Data(
+            """
+            data: {"id":"generation-123","model":"provider/model-v2","choices":[{"delta":{"content":"Done"},"finish_reason":null,"native_finish_reason":null}],"openrouter_metadata":{"requested":"openrouter/auto","strategy":"auto","region":"us-west","summary":"Selected one endpoint","attempt":2,"is_byok":false,"pipeline":[{"type":"plugin","name":"context-compression"}]}}
+
+            data: {"id":"generation-123","model":"provider/model-v2","choices":[{"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """.utf8
+          )
+        )
+      }
+
+      let session = LanguageModelSession(model: makeMockModel(name: "openrouter/auto"))
+      _ = try await session.respond(to: "Hello")
+
+      let response = try #require(session.transcript.compactMap(\.response).last)
+      #expect(
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.generationID]
+          as? String == "generation-123"
+      )
+      #expect(
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.finishReason]
+          as? String == "stop"
+      )
+      #expect(
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason]
+          as? String == "stop"
+      )
+      let metadata =
+        response.metadata[ChatCompletionsLanguageModel.MetadataKey.routerMetadata]
+        as? ChatCompletionsLanguageModel.RouterMetadata
+      #expect(metadata?.requested == "openrouter/auto")
+      #expect(metadata?.strategy == "auto")
+      #expect(metadata?.attempt == 2)
+      #expect(metadata?.pipeline.map(\.name) == ["context-compression"])
+    }
   }
 }

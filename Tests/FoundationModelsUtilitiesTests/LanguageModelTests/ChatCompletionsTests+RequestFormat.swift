@@ -37,6 +37,26 @@ extension ChatCompletionsTests {
       #expect(serverTool["function"] == nil)
     }
 
+    @Test func `provider plugins use the chat completions wire format`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("Done")) }
+      var model = makeMockModel()
+      model.plugins = [
+        .init(id: "context-compression"),
+        .init(id: "response-healing", enabled: false),
+      ]
+      let session = LanguageModelSession(model: model)
+
+      _ = try await session.respond(to: "Continue this long conversation")
+
+      let body = try requestBody()
+      let plugins = try #require(body["plugins"] as? [[String: Any]])
+      #expect(plugins.count == 2)
+      #expect(plugins[0]["id"] as? String == "context-compression")
+      #expect(plugins[0]["enabled"] == nil)
+      #expect(plugins[1]["id"] as? String == "response-healing")
+      #expect(plugins[1]["enabled"] as? Bool == false)
+    }
+
     @Test func `sends model name in request body`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 

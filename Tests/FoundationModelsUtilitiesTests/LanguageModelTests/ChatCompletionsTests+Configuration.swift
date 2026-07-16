@@ -25,13 +25,15 @@ extension ChatCompletionsTests {
         url: url,
         additionalHeaders: ["Authorization": "Bearer test"],
         supportsGuidedGeneration: false,
-        serverTools: [.init(type: "provider:web_search")]
+        serverTools: [.init(type: "provider:web_search")],
+        plugins: [.init(id: "context-compression")]
       )
       #expect(model.name == "foo")
       #expect(model.url == url)
       #expect(model.additionalHeaders == ["Authorization": "Bearer test"])
       #expect(model.supportsGuidedGeneration == false)
       #expect(model.serverTools == [.init(type: "provider:web_search")])
+      #expect(model.plugins == [.init(id: "context-compression")])
     }
 
     @Test func `defaults to supporting guided generation`() {
