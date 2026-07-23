@@ -521,25 +521,6 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           }
         }
 
-        // Send usage AFTER content so the authoritative cumulative total
-        // overwrites any tokens credited by `appendText` for this chunk.
-        if let usage = chunk.usage {
-          await channel.send(
-            .response(
-              entryID: responseEntryID,
-              action: .updateUsage(
-                input: .init(
-                  totalTokenCount: usage.promptTokens,
-                  cachedTokenCount: usage.promptTokensDetails?.cachedTokens ?? 0
-                ),
-                output: .init(
-                  totalTokenCount: usage.completionTokens,
-                  reasoningTokenCount: usage.completionTokensDetails?.reasoningTokens ?? 0
-                )
-              )
-            )
-          )
-        }
       }
     }
 
