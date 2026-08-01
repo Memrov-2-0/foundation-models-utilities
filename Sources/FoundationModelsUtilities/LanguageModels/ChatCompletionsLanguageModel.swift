@@ -240,6 +240,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// A short machine-readable error code provided by the server.
     public var code: String?
 
+    public var errorDescription: String? {
+      message
+    }
+
     /// Creates a new API error.
     ///
     /// - Parameters:
@@ -429,6 +433,13 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
 
       for try await chunk in chunks {
+        if let error = chunk.error {
+          throw ChatCompletionsLanguageModel.APIError(
+            message: error.message,
+            type: error.metadata?.errorType ?? error.type
+          )
+        }
+
         let choice = chunk.choices.first
         let responseText = choice?.delta.content
         let hasTerminalResponseMetadata =
@@ -1012,11 +1023,26 @@ private struct ChatCompletionsClient {
     let model: String
     let choices: [Choice]
     let usage: Usage?
+    let error: StreamError?
     let openRouterMetadata: ChatCompletionsLanguageModel.RouterMetadata?
 
     private enum CodingKeys: String, CodingKey {
-      case id, model, choices, usage
+      case id, model, choices, usage, error
       case openRouterMetadata = "openrouter_metadata"
+    }
+
+    struct StreamError: Decodable {
+      let message: String
+      let type: String?
+      let metadata: Metadata?
+
+      struct Metadata: Decodable {
+        let errorType: String?
+
+        private enum CodingKeys: String, CodingKey {
+          case errorType = "error_type"
+        }
+      }
     }
 
     struct Choice: Decodable {

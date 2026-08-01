@@ -196,6 +196,19 @@ enum MockSSE {
     )
   }
 
+  static func openRouterMidStreamError(message: String, errorType: String) -> Data {
+    let escapedMessage = jsonEscape(message)
+    let escapedType = jsonEscape(errorType)
+    return Data(
+      [
+        #"data: {"id":"gen-1","model":"mock","error":{"code":429,"message":"\#(escapedMessage)","metadata":{"error_type":"\#(escapedType)"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}"#,
+        "",
+        "data: [DONE]",
+        ""
+      ].joined(separator: "\n").utf8
+    )
+  }
+
   static func toolCallThenText(
     toolCallData: Data,
     textResponse: String

@@ -39,5 +39,37 @@ extension ChatCompletionsTests {
         try await session.respond(to: "test")
       }
     }
+
+    @Test func `throws typed OpenRouter error embedded in a completion chunk`() async throws {
+      MockSSEProtocol.handler = { _ in
+        (
+          200,
+          MockSSE.openRouterMidStreamError(
+            message: "Rate limit exceeded",
+            errorType: "rate_limit_exceeded"
+          )
+        )
+      }
+
+      let session = LanguageModelSession(model: makeMockModel())
+      do {
+        _ = try await session.respond(to: "test")
+        Issue.record("Expected the OpenRouter streaming error to be thrown")
+      } catch let error as ChatCompletionsLanguageModel.APIError {
+        #expect(error.message == "Rate limit exceeded")
+        #expect(error.type == "rate_limit_exceeded")
+      } catch {
+        Issue.record("Unexpected error: \(error)")
+      }
+    }
+
+    @Test func `API error exposes the provider message`() {
+      let error = ChatCompletionsLanguageModel.APIError(
+        message: "Provider unavailable",
+        type: "provider_unavailable"
+      )
+
+      #expect(error.errorDescription == "Provider unavailable")
+    }
   }
 }
