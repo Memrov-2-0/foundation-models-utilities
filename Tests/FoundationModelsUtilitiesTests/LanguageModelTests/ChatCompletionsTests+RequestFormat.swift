@@ -67,6 +67,22 @@ extension ChatCompletionsTests {
       #expect(body["model"] as? String == "foo-mini")
     }
 
+    @Test func `sends fallback models in provider wire format`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
+
+      let session = LanguageModelSession(
+        model: makeMockModel(
+          name: "provider/primary",
+          fallbackModelNames: ["openrouter/auto"]
+        )
+      )
+      _ = try await session.respond(to: "test")
+
+      let body = try requestBody()
+      #expect(body["model"] as? String == "provider/primary")
+      #expect(body["models"] as? [String] == ["openrouter/auto"])
+    }
+
     @Test func `sends provider session identifier in request body`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 

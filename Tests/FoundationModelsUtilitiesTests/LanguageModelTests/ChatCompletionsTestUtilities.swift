@@ -19,6 +19,7 @@ import Testing
 
 func makeMockModel(
   name: String = "test-model",
+  fallbackModelNames: [String] = [],
   headers: [String: String] = [:],
   supportsGuidedGeneration: Bool = true,
   sessionID: String? = nil
@@ -27,6 +28,7 @@ func makeMockModel(
   config.protocolClasses = [MockSSEProtocol.self]
   var model = ChatCompletionsLanguageModel(
     name: name,
+    fallbackModelNames: fallbackModelNames,
     url: URL(string: "https://mock-llm.test/v1")!,
     additionalHeaders: headers,
     supportsGuidedGeneration: supportsGuidedGeneration,

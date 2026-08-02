@@ -142,6 +142,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// chat completion request.
   public var name: String
 
+  /// Additional model identifiers sent in the provider-specific `models`
+  /// field and tried in order if the primary model fails.
+  public var fallbackModelNames: [String]
+
   /// The base URL of the chat completions endpoint. The path
   /// `/v1/chat/completions` is appended automatically when the supplied
   /// URL does not already include a `v1` segment.
@@ -171,6 +175,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// - Parameters:
   ///   - name: The model identifier sent in the `model` field of each
   ///     request.
+  ///   - fallbackModelNames: Additional model identifiers sent in the
+  ///     provider-specific `models` field, in fallback order.
   ///   - url: The base URL of the chat completions endpoint.
   ///   - additionalHeaders: Headers to merge on top of the defaults
   ///     (for example, an `Authorization` header).
@@ -182,6 +188,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   ///     ephemeral configuration is used.
   public init(
     name: String,
+    fallbackModelNames: [String] = [],
     url: URL,
     additionalHeaders: [String: String] = [:],
     supportsGuidedGeneration: Bool = true,
@@ -191,6 +198,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     urlSessionConfiguration: URLSessionConfiguration? = nil
   ) {
     self.name = name
+    self.fallbackModelNames = fallbackModelNames
     self.url = url
     self.additionalHeaders = additionalHeaders
     self.supportsGuidedGeneration = supportsGuidedGeneration
@@ -212,6 +220,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   public var executorConfiguration: Executor.Configuration {
     Executor.Configuration(
       modelName: name,
+      fallbackModelNames: fallbackModelNames,
       url: url,
       additionalHeaders: additionalHeaders,
       serverTools: serverTools,
@@ -317,6 +326,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
     public struct Configuration: Hashable, Sendable {
       fileprivate let modelName: String
+      fileprivate let fallbackModelNames: [String]
       fileprivate let url: URL
       fileprivate let additionalHeaders: [String: String]
       fileprivate let serverTools: [ServerTool]
@@ -326,6 +336,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
       public static func == (lhs: Configuration, rhs: Configuration) -> Bool {
         lhs.modelName == rhs.modelName
+          && lhs.fallbackModelNames == rhs.fallbackModelNames
           && lhs.url == rhs.url
           && lhs.additionalHeaders == rhs.additionalHeaders
           && lhs.serverTools == rhs.serverTools
@@ -335,6 +346,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
       public func hash(into hasher: inout Hasher) {
         hasher.combine(modelName)
+        hasher.combine(fallbackModelNames)
         hasher.combine(url)
         hasher.combine(additionalHeaders)
         hasher.combine(serverTools)
@@ -369,6 +381,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       // Translate the framework's request into the OpenAI-compatible wire format.
       let chatRequest = ChatCompletionsClient.ChatCompletionRequest(
         model: configuration.modelName,
+        models: configuration.fallbackModelNames.isEmpty ? nil : configuration.fallbackModelNames,
         messages: try convertedTranscript(request.transcript),
         temperature: request.generationOptions.temperature,
         topP: try request.generationOptions.samplingMode.map(topP),
@@ -877,6 +890,7 @@ private struct ChatCompletionsClient {
     }
 
     var model: String
+    var models: [String]?
     var messages: [ChatMessage]
     var temperature: Double?
     var topP: Double?
@@ -899,6 +913,7 @@ private struct ChatCompletionsClient {
 
     private enum CodingKeys: String, CodingKey {
       case model
+      case models
       case messages
       case temperature
       case topP = "top_p"
