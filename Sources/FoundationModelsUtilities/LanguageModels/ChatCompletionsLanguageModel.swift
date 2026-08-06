@@ -553,11 +553,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       case .greedy:
         return 0
 
-      case .randomTopK:
+      case .top:
         throw ChatCompletionsLanguageModel.RequestError.invalidRequest(
           "Top K sampling is not supported"
         )
-      case .randomProbabilityThreshold(let threshold, let seed):
+      case .nucleus(let threshold, let seed):
         guard seed == nil else {
           throw ChatCompletionsLanguageModel.RequestError.invalidRequest(
             "Setting a random seed is not supported"
