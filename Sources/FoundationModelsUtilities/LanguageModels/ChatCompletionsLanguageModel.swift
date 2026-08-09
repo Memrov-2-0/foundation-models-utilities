@@ -460,6 +460,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
       for try await chunk in chunks {
         if let error = chunk.error {
+          if emittedResponseText {
+            try? await Task.sleep(for: .milliseconds(1))
+          }
           throw ChatCompletionsLanguageModel.APIError(
             message: error.message,
             type: error.metadata?.errorType ?? error.type
@@ -561,7 +564,6 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 action: .appendText(text, tokenCount: 1)
               )
             )
-            await Task.yield()
           }
         }
 
