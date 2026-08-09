@@ -95,6 +95,21 @@ extension ChatCompletionsTests {
       #expect(body["session_id"] as? String == "conversation-123")
     }
 
+    @Test func `requires providers to support every requested parameter`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
+
+      let session = LanguageModelSession(
+        model: makeMockModel(
+          providerPreferences: .init(requireParameters: true)
+        )
+      )
+      _ = try await session.respond(to: "test")
+
+      let body = try requestBody()
+      let provider = try #require(body["provider"] as? [String: Any])
+      #expect(provider["require_parameters"] as? Bool == true)
+    }
+
     @Test func `enables streaming in request`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 

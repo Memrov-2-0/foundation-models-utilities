@@ -126,6 +126,20 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     }
   }
 
+  /// Provider routing preferences included in a chat-completions request.
+  public struct ProviderPreferences: Codable, Hashable, Sendable {
+    /// When `true`, only providers that support every request parameter are eligible.
+    public var requireParameters: Bool?
+
+    public init(requireParameters: Bool? = nil) {
+      self.requireParameters = requireParameters
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case requireParameters = "require_parameters"
+    }
+  }
+
   /// Routing information returned by compatible chat-completions providers.
   public struct RouterMetadata: Codable, Equatable, Hashable, Sendable {
     public struct PipelineStage: Codable, Equatable, Hashable, Sendable {
@@ -207,6 +221,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// Provider-managed plugins included in each chat-completions request.
   public var plugins: [Plugin]
 
+  /// Provider routing preferences included in each request.
+  public var providerPreferences: ProviderPreferences?
+
   /// A stable provider session identifier used for routing continuity.
   public var sessionID: String?
 
@@ -237,6 +254,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     supportsGuidedGeneration: Bool = true,
     serverTools: [ServerTool] = [],
     plugins: [Plugin] = [],
+    providerPreferences: ProviderPreferences? = nil,
     sessionID: String? = nil,
     urlSessionConfiguration: URLSessionConfiguration? = nil
   ) {
@@ -247,6 +265,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     self.supportsGuidedGeneration = supportsGuidedGeneration
     self.serverTools = serverTools
     self.plugins = plugins
+    self.providerPreferences = providerPreferences
     self.sessionID = sessionID
     self.urlSession = urlSessionConfiguration.map { URLSession(configuration: $0) }
   }
@@ -268,6 +287,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       additionalHeaders: additionalHeaders,
       serverTools: serverTools,
       plugins: plugins,
+      providerPreferences: providerPreferences,
       sessionID: sessionID,
       urlSession: urlSession
     )
@@ -374,6 +394,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       fileprivate let additionalHeaders: [String: String]
       fileprivate let serverTools: [ServerTool]
       fileprivate let plugins: [Plugin]
+      fileprivate let providerPreferences: ProviderPreferences?
       fileprivate let sessionID: String?
       fileprivate let urlSession: URLSession?
 
@@ -384,6 +405,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           && lhs.additionalHeaders == rhs.additionalHeaders
           && lhs.serverTools == rhs.serverTools
           && lhs.plugins == rhs.plugins
+          && lhs.providerPreferences == rhs.providerPreferences
           && lhs.sessionID == rhs.sessionID
       }
 
@@ -394,6 +416,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         hasher.combine(additionalHeaders)
         hasher.combine(serverTools)
         hasher.combine(plugins)
+        hasher.combine(providerPreferences)
         hasher.combine(sessionID)
       }
     }
@@ -460,6 +483,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           )
         },
         plugins: configuration.plugins.isEmpty ? nil : configuration.plugins,
+        provider: configuration.providerPreferences,
         sessionID: configuration.sessionID
       )
 
@@ -872,10 +896,14 @@ private struct ChatCompletionsClient {
             )
           }
 
-          for try await line in stream.lines {
-            if let chunk = try parseStreamLine(line) {
+          var event = SSEEventAccumulator()
+          for try await byte in stream {
+            if let data = event.consume(byte), let chunk = try parseEventData(data) {
               continuation.yield(chunk)
             }
+          }
+          if let data = event.finish(), let chunk = try parseEventData(data) {
+            continuation.yield(chunk)
           }
 
           continuation.finish()
@@ -890,11 +918,14 @@ private struct ChatCompletionsClient {
             )
           }
 
-          let body = String(data: data, encoding: .utf8) ?? ""
-          for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            if let chunk = try parseStreamLine(String(line)) {
+          var event = SSEEventAccumulator()
+          for byte in data {
+            if let data = event.consume(byte), let chunk = try parseEventData(data) {
               continuation.yield(chunk)
             }
+          }
+          if let data = event.finish(), let chunk = try parseEventData(data) {
+            continuation.yield(chunk)
           }
 
           continuation.finish()
@@ -924,45 +955,83 @@ private struct ChatCompletionsClient {
     return urlRequest
   }
 
-  func parseStreamLine(_ line: String) throws -> ChatCompletionChunk? {
-    let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+  private struct SSEEventAccumulator {
+    private var lineBytes = [UInt8]()
+    private var dataLines = [String]()
 
-    // Skip empty lines and comments
-    guard !trimmedLine.isEmpty, !trimmedLine.hasPrefix(":") else {
-      return nil
-    }
-
-    if trimmedLine.hasPrefix("data: ") {
-      let jsonString = String(trimmedLine.dropFirst(6))  // Remove "data: "
-
-      if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+    mutating func consume(_ byte: UInt8) -> String? {
+      guard byte == 0x0A else {
+        lineBytes.append(byte)
         return nil
       }
 
-      guard let jsonData = jsonString.data(using: .utf8) else {
-        throw ChatCompletionsLanguageModel.RequestError.invalidStreamData
-      }
-
-      let decoder = JSONDecoder()
-      do {
-        return try decoder.decode(ChatCompletionChunk.self, from: jsonData)
-      } catch {
-        if let response = try? decoder.decode(
-          ChatCompletionsLanguageModel.ErrorResponse.self,
-          from: jsonData
-        ) {
-          throw ChatCompletionsLanguageModel.APIError(
-            message: response.error.message,
-            type: response.error.type,
-            param: response.error.param,
-            code: response.error.code
-          )
-        }
-        throw error
-      }
+      return consumeBufferedLine()
     }
 
-    return nil
+    mutating func finish() -> String? {
+      if !lineBytes.isEmpty, let completedEvent = consumeBufferedLine() {
+        return completedEvent
+      }
+      return finishEvent()
+    }
+
+    private mutating func consumeBufferedLine() -> String? {
+      if lineBytes.last == 0x0D {
+        lineBytes.removeLast()
+      }
+      let line = String(decoding: lineBytes, as: UTF8.self)
+      lineBytes.removeAll(keepingCapacity: true)
+      return consumeLine(line)
+    }
+
+    private mutating func consumeLine(_ line: String) -> String? {
+      if line.isEmpty {
+        return finishEvent()
+      }
+      guard !line.hasPrefix(":"), line.hasPrefix("data:") else {
+        return nil
+      }
+      var value = line.dropFirst(5)
+      if value.first == " " {
+        value = value.dropFirst()
+      }
+      dataLines.append(String(value))
+      return nil
+    }
+
+    private mutating func finishEvent() -> String? {
+      guard !dataLines.isEmpty else { return nil }
+      defer { dataLines.removeAll(keepingCapacity: true) }
+      return dataLines.joined(separator: "\n")
+    }
+  }
+
+  func parseEventData(_ data: String) throws -> ChatCompletionChunk? {
+    if data.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+      return nil
+    }
+
+    guard let jsonData = data.data(using: .utf8) else {
+      throw ChatCompletionsLanguageModel.RequestError.invalidStreamData
+    }
+
+    let decoder = JSONDecoder()
+    do {
+      return try decoder.decode(ChatCompletionChunk.self, from: jsonData)
+    } catch {
+      if let response = try? decoder.decode(
+        ChatCompletionsLanguageModel.ErrorResponse.self,
+        from: jsonData
+      ) {
+        throw ChatCompletionsLanguageModel.APIError(
+          message: response.error.message,
+          type: response.error.type,
+          param: response.error.param,
+          code: response.error.code
+        )
+      }
+      throw error
+    }
   }
 
   struct ChatCompletionRequest: Encodable {
@@ -991,6 +1060,7 @@ private struct ChatCompletionsClient {
     var toolChoice: ChatCompletionRequest.ToolChoice?
     var responseFormat: ResponseFormat?
     var plugins: [ChatCompletionsLanguageModel.Plugin]?
+    var provider: ChatCompletionsLanguageModel.ProviderPreferences?
     var sessionID: String?
     var stream = true
     var streamOptions = StreamOptions(includeUsage: true)
@@ -1013,6 +1083,7 @@ private struct ChatCompletionsClient {
       case tools
       case responseFormat = "response_format"
       case plugins
+      case provider
       case sessionID = "session_id"
       case stream
       case streamOptions = "stream_options"
