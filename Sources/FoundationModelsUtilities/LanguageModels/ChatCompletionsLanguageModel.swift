@@ -46,6 +46,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     public static let finishReason = "chatCompletions.finishReason"
     public static let nativeFinishReason = "chatCompletions.nativeFinishReason"
     public static let routerMetadata = "chatCompletions.routerMetadata"
+    public static let streamInterruption = "chatCompletions.streamInterruption"
   }
 
   /// A source citation returned by a chat-completions provider.
@@ -68,6 +69,17 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       self.content = content
       self.startIndex = startIndex
       self.endIndex = endIndex
+    }
+  }
+
+  /// A provider error received after visible response text was already emitted.
+  public struct StreamInterruption: Codable, Equatable, Hashable, Sendable {
+    public var message: String
+    public var type: String?
+
+    public init(message: String, type: String? = nil) {
+      self.message = message
+      self.type = type
     }
   }
 
@@ -460,12 +472,23 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
 
       for try await chunk in chunks {
         if let error = chunk.error {
-          if emittedResponseText {
-            try? await Task.sleep(for: .milliseconds(1))
-          }
-          throw ChatCompletionsLanguageModel.APIError(
+          let interruption = ChatCompletionsLanguageModel.StreamInterruption(
             message: error.message,
             type: error.metadata?.errorType ?? error.type
+          )
+          if emittedResponseText {
+            responseMetadata[MetadataKey.streamInterruption] = interruption
+            await channel.send(
+              .response(
+                entryID: responseEntryID,
+                action: .updateMetadata(responseMetadata)
+              )
+            )
+            return
+          }
+          throw ChatCompletionsLanguageModel.APIError(
+            message: interruption.message,
+            type: interruption.type
           )
         }
 
