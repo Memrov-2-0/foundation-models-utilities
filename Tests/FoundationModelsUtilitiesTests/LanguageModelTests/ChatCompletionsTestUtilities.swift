@@ -22,7 +22,8 @@ func makeMockModel(
   fallbackModelNames: [String] = [],
   headers: [String: String] = [:],
   supportsGuidedGeneration: Bool = true,
-  sessionID: String? = nil
+  sessionID: String? = nil,
+  providerPreferences: ChatCompletionsLanguageModel.ProviderPreferences? = nil
 ) -> ChatCompletionsLanguageModel {
   let config = URLSessionConfiguration.ephemeral
   config.protocolClasses = [MockSSEProtocol.self]
@@ -34,6 +35,7 @@ func makeMockModel(
     supportsGuidedGeneration: supportsGuidedGeneration,
     sessionID: sessionID
   )
+  model.providerPreferences = providerPreferences
   model.urlSession = URLSession(configuration: config)
   return model
 }
