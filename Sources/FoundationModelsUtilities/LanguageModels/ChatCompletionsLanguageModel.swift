@@ -88,10 +88,30 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// Unlike Foundation Models ``Tool`` values, server tools execute inside
   /// the provider and therefore only require their provider-defined type.
   public struct ServerTool: Hashable, Sendable {
-    public var type: String
+    public struct Parameters: Codable, Hashable, Sendable {
+      public var maxResults: Int?
+      public var maxTotalResults: Int?
 
-    public init(type: String) {
+      public init(
+        maxResults: Int? = nil,
+        maxTotalResults: Int? = nil
+      ) {
+        self.maxResults = maxResults
+        self.maxTotalResults = maxTotalResults
+      }
+
+      private enum CodingKeys: String, CodingKey {
+        case maxResults = "max_results"
+        case maxTotalResults = "max_total_results"
+      }
+    }
+
+    public var type: String
+    public var parameters: Parameters?
+
+    public init(type: String, parameters: Parameters? = nil) {
       self.type = type
+      self.parameters = parameters
     }
   }
 
@@ -417,7 +437,10 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               parameters: tool.parameters
             )
           )
-        } + configuration.serverTools.map { ChatCompletionsClient.Tool(type: $0.type) },
+        }
+          + configuration.serverTools.map {
+            ChatCompletionsClient.Tool(type: $0.type, parameters: $0.parameters)
+          },
         toolChoice: ChatCompletionsClient.ChatCompletionRequest.ToolChoice(
           mode: {
             switch request.generationOptions.toolCallingMode?.kind {
@@ -1056,15 +1079,21 @@ private struct ChatCompletionsClient {
   struct Tool: Encodable {
     var type: String
     var function: Function?
+    var parameters: ChatCompletionsLanguageModel.ServerTool.Parameters?
 
     init(function: Function) {
       type = "function"
       self.function = function
+      parameters = nil
     }
 
-    init(type: String) {
+    init(
+      type: String,
+      parameters: ChatCompletionsLanguageModel.ServerTool.Parameters?
+    ) {
       self.type = type
       function = nil
+      self.parameters = parameters
     }
 
     struct Function: Encodable {
