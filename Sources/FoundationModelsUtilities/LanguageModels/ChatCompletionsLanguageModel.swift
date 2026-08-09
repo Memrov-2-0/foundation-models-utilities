@@ -10,11 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 public import Foundation
-public import FoundationModels
-
 #if canImport(FoundationNetworking)
 public import FoundationNetworking
 #endif
+public import FoundationModels
 #if canImport(CoreImage)
 private import CoreImage
 private import UniformTypeIdentifiers
@@ -562,6 +561,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 action: .appendText(text, tokenCount: 1)
               )
             )
+            await Task.yield()
           }
         }
 
@@ -1234,8 +1234,8 @@ private struct ChatCompletionsClient {
 }
 
 #if canImport(CoreImage)
-extension CGImage {
-  fileprivate func jpegData() -> Data {
+private extension CGImage {
+  func jpegData() -> Data {
     let imageData = NSMutableData()
     let destination = CGImageDestinationCreateWithData(
       imageData,
