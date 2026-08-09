@@ -10,10 +10,11 @@
 //
 //===----------------------------------------------------------------------===//
 public import Foundation
+public import FoundationModels
+
 #if canImport(FoundationNetworking)
 public import FoundationNetworking
 #endif
-public import FoundationModels
 #if canImport(CoreImage)
 private import CoreImage
 private import UniformTypeIdentifiers
@@ -98,9 +99,9 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   public struct RouterMetadata: Codable, Equatable, Hashable, Sendable {
     public struct PipelineStage: Codable, Equatable, Hashable, Sendable {
       public var type: String?
-      public var name: String
+      public var name: String?
 
-      public init(type: String? = nil, name: String) {
+      public init(type: String? = nil, name: String? = nil) {
         self.type = type
         self.name = name
       }
@@ -130,6 +131,17 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       self.attempt = attempt
       self.isBYOK = isBYOK
       self.pipeline = pipeline
+    }
+
+    public init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      requested = try container.decodeIfPresent(String.self, forKey: .requested)
+      strategy = try container.decodeIfPresent(String.self, forKey: .strategy)
+      region = try container.decodeIfPresent(String.self, forKey: .region)
+      summary = try container.decodeIfPresent(String.self, forKey: .summary)
+      attempt = try container.decodeIfPresent(Int.self, forKey: .attempt)
+      isBYOK = try container.decodeIfPresent(Bool.self, forKey: .isBYOK)
+      pipeline = try container.decodeIfPresent([PipelineStage].self, forKey: .pipeline) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -444,6 +456,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       let toolCallsEntryID = UUID().uuidString
       var citations = [URLCitation]()
       var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
+      var emittedResponseText = false
+      var emittedToolCall = false
 
       for try await chunk in chunks {
         if let error = chunk.error {
@@ -520,6 +534,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               toolCallRouting[toolCallDelta.index] = routing
 
               guard !routing.id.isEmpty, !routing.name.isEmpty else { continue }
+              emittedToolCall = true
 
               await channel.send(
                 .toolCalls(
@@ -535,7 +550,12 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
                 )
               )
             }
-          } else if let text = delta.content {
+          }
+
+          if let text = delta.content {
+            if !text.isEmpty {
+              emittedResponseText = true
+            }
             await channel.send(
               .response(
                 entryID: responseEntryID,
@@ -545,6 +565,30 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           }
         }
 
+        if let usage = chunk.usage {
+          await channel.send(
+            .response(
+              entryID: responseEntryID,
+              action: .updateUsage(
+                input: .init(
+                  totalTokenCount: usage.promptTokens,
+                  cachedTokenCount: usage.promptTokensDetails?.cachedTokens ?? 0
+                ),
+                output: .init(
+                  totalTokenCount: usage.completionTokens,
+                  reasoningTokenCount: usage.completionTokensDetails?.reasoningTokens ?? 0
+                )
+              )
+            )
+          )
+        }
+      }
+
+      guard emittedResponseText || emittedToolCall else {
+        throw ChatCompletionsLanguageModel.APIError(
+          message: "The provider completed without response content.",
+          type: "empty_response"
+        )
       }
     }
 
@@ -1046,6 +1090,19 @@ private struct ChatCompletionsClient {
       case openRouterMetadata = "openrouter_metadata"
     }
 
+    init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+      model = try container.decodeIfPresent(String.self, forKey: .model) ?? ""
+      choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
+      usage = try container.decodeIfPresent(Usage.self, forKey: .usage)
+      error = try container.decodeIfPresent(StreamError.self, forKey: .error)
+      openRouterMetadata = try container.decodeIfPresent(
+        ChatCompletionsLanguageModel.RouterMetadata.self,
+        forKey: .openRouterMetadata
+      )
+    }
+
     struct StreamError: Decodable {
       let message: String
       let type: String?
@@ -1177,14 +1234,14 @@ private struct ChatCompletionsClient {
 }
 
 #if canImport(CoreImage)
-private extension CGImage {
-  func jpegData() -> Data {
+extension CGImage {
+  fileprivate func jpegData() -> Data {
     let imageData = NSMutableData()
     let destination = CGImageDestinationCreateWithData(
-      /* data */ imageData,
-      /* format */ UTType.jpeg.identifier as CFString,
-      /* count */ 1,
-      /* options */ nil
+      imageData,
+      UTType.jpeg.identifier as CFString,
+      1,
+      nil
     )!
     CGImageDestinationAddImage(destination, self, nil)
     CGImageDestinationFinalize(destination)
