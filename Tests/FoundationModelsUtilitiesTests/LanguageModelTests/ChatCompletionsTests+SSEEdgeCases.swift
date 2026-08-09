@@ -59,6 +59,19 @@ extension ChatCompletionsTests {
       #expect(session.transcript.responseText == "Joined")
     }
 
+    @Test func `flushes a final SSE event without a line terminator`() async throws {
+      let sseData = Data(
+        #"data: {"id":"1","model":"mock","choices":[{"delta":{"content":"Tail"}}]}"#.utf8
+      )
+
+      MockSSEProtocol.handler = { _ in (200, sseData) }
+
+      let session = LanguageModelSession(model: makeMockModel())
+      _ = try await session.respond(to: "test")
+
+      #expect(session.transcript.responseText == "Tail")
+    }
+
     @Test func `handles empty lines between SSE events`() async throws {
       let sseData = Data(
         [
