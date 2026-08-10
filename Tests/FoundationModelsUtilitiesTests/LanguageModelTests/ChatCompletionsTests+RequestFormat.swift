@@ -57,6 +57,26 @@ extension ChatCompletionsTests {
       #expect(plugins[1]["enabled"] as? Bool == false)
     }
 
+    @Test func `provider plugins include allowed model patterns`() async throws {
+      MockSSEProtocol.handler = { _ in (200, MockSSE.text("Done")) }
+      var model = makeMockModel()
+      model.plugins = [
+        .init(
+          id: "auto-beta-router",
+          allowedModels: ["openai/*", "google/*"]
+        )
+      ]
+      let session = LanguageModelSession(model: model)
+
+      _ = try await session.respond(to: "Choose a model")
+
+      let body = try requestBody()
+      let plugins = try #require(body["plugins"] as? [[String: Any]])
+      #expect(plugins.count == 1)
+      #expect(plugins[0]["id"] as? String == "auto-beta-router")
+      #expect(plugins[0]["allowed_models"] as? [String] == ["openai/*", "google/*"])
+    }
+
     @Test func `sends model name in request body`() async throws {
       MockSSEProtocol.handler = { _ in (200, MockSSE.text("OK")) }
 

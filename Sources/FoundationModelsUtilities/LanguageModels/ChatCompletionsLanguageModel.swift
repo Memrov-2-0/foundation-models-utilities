@@ -119,10 +119,17 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   public struct Plugin: Codable, Hashable, Sendable {
     public var id: String
     public var enabled: Bool?
+    public var allowedModels: [String]?
 
-    public init(id: String, enabled: Bool? = nil) {
+    public init(id: String, enabled: Bool? = nil, allowedModels: [String]? = nil) {
       self.id = id
       self.enabled = enabled
+      self.allowedModels = allowedModels
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case id, enabled
+      case allowedModels = "allowed_models"
     }
   }
 
