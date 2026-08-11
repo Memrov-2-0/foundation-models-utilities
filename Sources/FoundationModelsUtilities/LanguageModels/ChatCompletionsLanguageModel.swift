@@ -83,6 +83,36 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     }
   }
 
+  /// Reads provider metadata across Foundation Models runtime versions.
+  ///
+  /// Some runtimes preserve custom Codable values directly, while others
+  /// serialize those values as JSON strings in the transcript.
+  public static func metadataValue<Value: Decodable>(
+    _ type: Value.Type,
+    forKey key: String,
+    in response: Transcript.Response
+  ) -> Value? {
+    guard let storedValue = response.metadata[key] else { return nil }
+    let rawValue: Any = storedValue
+    if let value = rawValue as? Value { return value }
+    let json: String?
+    if let generatedContent = rawValue as? GeneratedContent {
+      json = try? generatedContent.value(String.self)
+    } else {
+      json = rawValue as? String
+    }
+    guard let json else { return nil }
+    if let value = json as? Value { return value }
+    return try? JSONDecoder().decode(Value.self, from: Data(json.utf8))
+  }
+
+  private static func serializedMetadataValue<Value: Encodable>(
+    _ value: Value
+  ) -> String? {
+    guard let data = try? JSONEncoder().encode(value) else { return nil }
+    return String(decoding: data, as: UTF8.self)
+  }
+
   /// A server-managed tool understood by the chat-completions provider.
   ///
   /// Unlike Foundation Models ``Tool`` values, server tools execute inside
@@ -520,7 +550,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
       let reasoningEntryID = UUID().uuidString
       let toolCallsEntryID = UUID().uuidString
       var citations = [URLCitation]()
-      var responseMetadata: [String: any Sendable & Codable & Equatable] = [:]
+      var responseMetadata = [String: String]()
       var emittedResponseText = false
       var emittedToolCall = false
 
@@ -531,7 +561,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             type: error.metadata?.errorType ?? error.type
           )
           if emittedResponseText {
-            responseMetadata[MetadataKey.streamInterruption] = interruption
+            responseMetadata[MetadataKey.streamInterruption] =
+              ChatCompletionsLanguageModel.serializedMetadataValue(interruption)
             await channel.send(
               .response(
                 entryID: responseEntryID,
@@ -554,7 +585,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
         responseMetadata[MetadataKey.generationID] = chunk.id
         responseMetadata[MetadataKey.selectedModel] = chunk.model
         if let routerMetadata = chunk.openRouterMetadata {
-          responseMetadata[MetadataKey.routerMetadata] = routerMetadata
+          responseMetadata[MetadataKey.routerMetadata] =
+            ChatCompletionsLanguageModel.serializedMetadataValue(routerMetadata)
         }
         if let finishReason = choice?.finishReason {
           responseMetadata[MetadataKey.finishReason] = finishReason
@@ -568,7 +600,8 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
             citations.append(citation)
           }
           if !citations.isEmpty {
-            responseMetadata[MetadataKey.urlCitations] = citations
+            responseMetadata[MetadataKey.urlCitations] =
+              ChatCompletionsLanguageModel.serializedMetadataValue(citations)
           }
         }
 
@@ -755,15 +788,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               )
             )
           }
-        case .custom:
-          throw LanguageModelError.unsupportedTranscriptContent(
-            LanguageModelError.UnsupportedTranscriptContent(
-              unsupportedContent: [entry],
-              debugDescription: "Custom segments are not supported by \(Self.self)"
-            )
-          )
-
-        @unknown default:
+        default:
           throw LanguageModelError.unsupportedTranscriptContent(
             LanguageModelError.UnsupportedTranscriptContent(
               unsupportedContent: [entry],

@@ -63,8 +63,11 @@ extension ChatCompletionsTests {
 
       let response = try #require(session.transcript.compactMap(\.response).last)
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.selectedModel]
-          as? String == "provider/model-v2"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.selectedModel,
+          in: response
+        ) == "provider/model-v2"
       )
     }
 
@@ -87,9 +90,11 @@ extension ChatCompletionsTests {
       _ = try await session.respond(to: "What changed?")
 
       let response = try #require(session.transcript.compactMap(\.response).last)
-      let citations =
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.urlCitations]
-        as? [ChatCompletionsLanguageModel.URLCitation]
+      let citations = ChatCompletionsLanguageModel.metadataValue(
+        [ChatCompletionsLanguageModel.URLCitation].self,
+        forKey: ChatCompletionsLanguageModel.MetadataKey.urlCitations,
+        in: response
+      )
       #expect(citations?.count == 1)
       #expect(citations?.first?.url == "https://example.com/source")
       #expect(citations?.first?.title == "Example Source")
@@ -117,20 +122,31 @@ extension ChatCompletionsTests {
 
       let response = try #require(session.transcript.compactMap(\.response).last)
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.generationID]
-          as? String == "generation-123"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.generationID,
+          in: response
+        ) == "generation-123"
       )
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.finishReason]
-          as? String == "stop"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.finishReason,
+          in: response
+        ) == "stop"
       )
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason]
-          as? String == "stop"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason,
+          in: response
+        ) == "stop"
       )
-      let metadata =
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.routerMetadata]
-        as? ChatCompletionsLanguageModel.RouterMetadata
+      let metadata = ChatCompletionsLanguageModel.metadataValue(
+        ChatCompletionsLanguageModel.RouterMetadata.self,
+        forKey: ChatCompletionsLanguageModel.MetadataKey.routerMetadata,
+        in: response
+      )
       #expect(metadata?.requested == "openrouter/auto")
       #expect(metadata?.strategy == "auto")
       #expect(metadata?.attempt == 2)

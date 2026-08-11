@@ -31,6 +31,11 @@ let package = Package(
     .target(
       name: "FoundationModelsUtilities",
       dependencies: [],
+      exclude: [
+        "History/DropCompletedToolCalls.swift",
+        "History/RollingWindow.swift",
+        "History/SummarizeHistory.swift",
+      ],
       swiftSettings: [
         .enableExperimentalFeature("InternalImportsByDefault"),
         .enableExperimentalFeature("NonisolatedNonsendingByDefault"),
@@ -41,6 +46,11 @@ let package = Package(
       name: "FoundationModelsUtilitiesTests",
       dependencies: [
         "FoundationModelsUtilities",
+      ],
+      exclude: [
+        "HistoryTests/DroppingCompletedToolCallsTests.swift",
+        "HistoryTests/RollingWindowTests.swift",
+        "HistoryTests/SummarizeHistoryTests.swift",
       ],
       swiftSettings: [
         .enableExperimentalFeature("InternalImportsByDefault"),
