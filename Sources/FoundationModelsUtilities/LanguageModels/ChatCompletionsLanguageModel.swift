@@ -92,9 +92,17 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     forKey key: String,
     in response: Transcript.Response
   ) -> Value? {
-    guard let rawValue = response.metadata[key] else { return nil }
+    guard let storedValue = response.metadata[key] else { return nil }
+    let rawValue: Any = storedValue
     if let value = rawValue as? Value { return value }
-    guard let json = rawValue as? String else { return nil }
+    let json: String?
+    if let generatedContent = rawValue as? GeneratedContent {
+      json = try? generatedContent.value(String.self)
+    } else {
+      json = rawValue as? String
+    }
+    guard let json else { return nil }
+    if let value = json as? Value { return value }
     return try? JSONDecoder().decode(Value.self, from: Data(json.utf8))
   }
 

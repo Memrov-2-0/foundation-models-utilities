@@ -63,8 +63,11 @@ extension ChatCompletionsTests {
 
       let response = try #require(session.transcript.compactMap(\.response).last)
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.selectedModel]
-          as? String == "provider/model-v2"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.selectedModel,
+          in: response
+        ) == "provider/model-v2"
       )
     }
 
@@ -119,16 +122,25 @@ extension ChatCompletionsTests {
 
       let response = try #require(session.transcript.compactMap(\.response).last)
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.generationID]
-          as? String == "generation-123"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.generationID,
+          in: response
+        ) == "generation-123"
       )
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.finishReason]
-          as? String == "stop"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.finishReason,
+          in: response
+        ) == "stop"
       )
       #expect(
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason]
-          as? String == "stop"
+        ChatCompletionsLanguageModel.metadataValue(
+          String.self,
+          forKey: ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason,
+          in: response
+        ) == "stop"
       )
       let metadata = ChatCompletionsLanguageModel.metadataValue(
         ChatCompletionsLanguageModel.RouterMetadata.self,
