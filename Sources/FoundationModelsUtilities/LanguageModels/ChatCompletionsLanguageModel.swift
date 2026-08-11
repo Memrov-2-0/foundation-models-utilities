@@ -83,6 +83,21 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     }
   }
 
+  /// Reads provider metadata across Foundation Models runtime versions.
+  ///
+  /// Some runtimes preserve custom Codable values directly, while others
+  /// serialize those values as JSON strings in the transcript.
+  public static func metadataValue<Value: Decodable>(
+    _ type: Value.Type,
+    forKey key: String,
+    in response: Transcript.Response
+  ) -> Value? {
+    guard let rawValue = response.metadata[key] else { return nil }
+    if let value = rawValue as? Value { return value }
+    guard let json = rawValue as? String else { return nil }
+    return try? JSONDecoder().decode(Value.self, from: Data(json.utf8))
+  }
+
   /// A server-managed tool understood by the chat-completions provider.
   ///
   /// Unlike Foundation Models ``Tool`` values, server tools execute inside
