@@ -755,15 +755,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
               )
             )
           }
-        case .custom:
-          throw LanguageModelError.unsupportedTranscriptContent(
-            LanguageModelError.UnsupportedTranscriptContent(
-              unsupportedContent: [entry],
-              debugDescription: "Custom segments are not supported by \(Self.self)"
-            )
-          )
-
-        @unknown default:
+        default:
           throw LanguageModelError.unsupportedTranscriptContent(
             LanguageModelError.UnsupportedTranscriptContent(
               unsupportedContent: [entry],
