@@ -87,9 +87,11 @@ extension ChatCompletionsTests {
       _ = try await session.respond(to: "What changed?")
 
       let response = try #require(session.transcript.compactMap(\.response).last)
-      let citations =
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.urlCitations]
-        as? [ChatCompletionsLanguageModel.URLCitation]
+      let citations = ChatCompletionsLanguageModel.metadataValue(
+        [ChatCompletionsLanguageModel.URLCitation].self,
+        forKey: ChatCompletionsLanguageModel.MetadataKey.urlCitations,
+        in: response
+      )
       #expect(citations?.count == 1)
       #expect(citations?.first?.url == "https://example.com/source")
       #expect(citations?.first?.title == "Example Source")
@@ -128,9 +130,11 @@ extension ChatCompletionsTests {
         response.metadata[ChatCompletionsLanguageModel.MetadataKey.nativeFinishReason]
           as? String == "stop"
       )
-      let metadata =
-        response.metadata[ChatCompletionsLanguageModel.MetadataKey.routerMetadata]
-        as? ChatCompletionsLanguageModel.RouterMetadata
+      let metadata = ChatCompletionsLanguageModel.metadataValue(
+        ChatCompletionsLanguageModel.RouterMetadata.self,
+        forKey: ChatCompletionsLanguageModel.MetadataKey.routerMetadata,
+        in: response
+      )
       #expect(metadata?.requested == "openrouter/auto")
       #expect(metadata?.strategy == "auto")
       #expect(metadata?.attempt == 2)
