@@ -334,7 +334,7 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// failed request or a streaming error event.
   ///
   /// Servers may populate any subset of the optional fields.
-  public struct APIError: LocalizedError {
+  public struct APIError: LocalizedError, Sendable {
     /// A human-readable explanation of the error returned by the server.
     public var message: String
 
@@ -349,6 +349,22 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     /// A short machine-readable error code provided by the server.
     public var code: String?
 
+    /// The OpenRouter generation identifier, when the provider created a
+    /// generation before returning the error.
+    public var generationID: String?
+
+    /// The HTTP status code for errors returned before streaming begins.
+    public var statusCode: Int?
+
+    /// The provider-requested retry delay, in seconds, when supplied.
+    public var retryAfterSeconds: TimeInterval?
+
+    /// The upstream provider's machine-readable error code, when supplied.
+    public var providerCode: String?
+
+    /// OpenRouter routing details attached to the failed request.
+    public var routerMetadata: RouterMetadata?
+
     public var errorDescription: String? {
       message
     }
@@ -360,16 +376,31 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
     ///   - type: The error category reported by the server.
     ///   - param: The request parameter associated with the error.
     ///   - code: A short machine-readable error code.
+    ///   - generationID: The OpenRouter generation identifier.
+    ///   - statusCode: The HTTP response status code.
+    ///   - retryAfterSeconds: The requested retry delay in seconds.
+    ///   - providerCode: The upstream provider error code.
+    ///   - routerMetadata: OpenRouter routing details.
     public init(
       message: String,
       type: String? = nil,
       param: String? = nil,
-      code: String? = nil
+      code: String? = nil,
+      generationID: String? = nil,
+      statusCode: Int? = nil,
+      retryAfterSeconds: TimeInterval? = nil,
+      providerCode: String? = nil,
+      routerMetadata: RouterMetadata? = nil
     ) {
       self.message = message
       self.type = type
       self.param = param
       self.code = code
+      self.generationID = generationID
+      self.statusCode = statusCode
+      self.retryAfterSeconds = retryAfterSeconds
+      self.providerCode = providerCode
+      self.routerMetadata = routerMetadata
     }
   }
 
@@ -405,14 +436,58 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
   /// The wire format of an error envelope returned by the chat completions
   /// endpoint, used internally to decode error responses before raising
   /// them as ``APIError``.
-  struct ErrorResponse: Codable, Sendable {
+  struct ErrorResponse: Decodable, Sendable {
+    var id: String?
     var error: APIError
+    var openRouterMetadata: RouterMetadata?
 
-    struct APIError: Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+      case id, error
+      case openRouterMetadata = "openrouter_metadata"
+    }
+
+    struct APIError: Decodable, Sendable {
       var message: String
       var type: String?
       var param: String?
       var code: String?
+      var metadata: Metadata?
+
+      struct Metadata: Decodable, Sendable {
+        var errorType: String?
+        var providerCode: String?
+
+        private enum CodingKeys: String, CodingKey {
+          case errorType = "error_type"
+          case providerCode = "provider_code"
+        }
+      }
+
+      private enum CodingKeys: String, CodingKey {
+        case message, type, param, code, metadata
+      }
+
+      init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        message = try container.decode(String.self, forKey: .message)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        param = try container.decodeIfPresent(String.self, forKey: .param)
+        code = Self.stringValue(in: container, forKey: .code)
+        metadata = try container.decodeIfPresent(Metadata.self, forKey: .metadata)
+      }
+
+      private static func stringValue(
+        in container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+      ) -> String? {
+        if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+          return value
+        }
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+          return String(value)
+        }
+        return nil
+      }
     }
   }
 
@@ -573,7 +648,11 @@ public struct ChatCompletionsLanguageModel: Sendable, LanguageModel {
           }
           throw ChatCompletionsLanguageModel.APIError(
             message: interruption.message,
-            type: interruption.type
+            type: interruption.type,
+            code: error.code,
+            generationID: chunk.id.isEmpty ? nil : chunk.id,
+            providerCode: error.metadata?.providerCode,
+            routerMetadata: chunk.openRouterMetadata
           )
         }
 
@@ -922,10 +1001,8 @@ private struct ChatCompletionsClient {
           let httpResponse = response as! HTTPURLResponse
 
           guard httpResponse.statusCode == 200 else {
-            throw ChatCompletionsLanguageModel.RequestError.httpError(
-              statusCode: httpResponse.statusCode,
-              data: try await stream.reduce(Data(), { $0 + [$1] })
-            )
+            let data = try await stream.reduce(Data(), { $0 + [$1] })
+            throw responseError(data: data, response: httpResponse)
           }
 
           var event = SSEEventAccumulator()
@@ -944,10 +1021,7 @@ private struct ChatCompletionsClient {
           let httpResponse = response as! HTTPURLResponse
 
           guard httpResponse.statusCode == 200 else {
-            throw ChatCompletionsLanguageModel.RequestError.httpError(
-              statusCode: httpResponse.statusCode,
-              data: data
-            )
+            throw responseError(data: data, response: httpResponse)
           }
 
           var event = SSEEventAccumulator()
@@ -985,6 +1059,37 @@ private struct ChatCompletionsClient {
     urlRequest.httpBody = try encoder.encode(request)
 
     return urlRequest
+  }
+
+  private func responseError(
+    data: Data,
+    response: HTTPURLResponse
+  ) -> any Error {
+    guard
+      let envelope = try? JSONDecoder().decode(
+        ChatCompletionsLanguageModel.ErrorResponse.self,
+        from: data
+      )
+    else {
+      return ChatCompletionsLanguageModel.RequestError.httpError(
+        statusCode: response.statusCode,
+        data: data
+      )
+    }
+
+    return ChatCompletionsLanguageModel.APIError(
+      message: envelope.error.message,
+      type: envelope.error.metadata?.errorType ?? envelope.error.type,
+      param: envelope.error.param,
+      code: envelope.error.code,
+      generationID: response.value(forHTTPHeaderField: "X-Generation-Id")
+        ?? envelope.id,
+      statusCode: response.statusCode,
+      retryAfterSeconds: response.value(forHTTPHeaderField: "Retry-After")
+        .flatMap(TimeInterval.init),
+      providerCode: envelope.error.metadata?.providerCode,
+      routerMetadata: envelope.openRouterMetadata
+    )
   }
 
   private struct SSEEventAccumulator {
@@ -1057,9 +1162,12 @@ private struct ChatCompletionsClient {
       ) {
         throw ChatCompletionsLanguageModel.APIError(
           message: response.error.message,
-          type: response.error.type,
+          type: response.error.metadata?.errorType ?? response.error.type,
           param: response.error.param,
-          code: response.error.code
+          code: response.error.code,
+          generationID: response.id,
+          providerCode: response.error.metadata?.providerCode,
+          routerMetadata: response.openRouterMetadata
         )
       }
       throw error
@@ -1263,14 +1371,35 @@ private struct ChatCompletionsClient {
     struct StreamError: Decodable {
       let message: String
       let type: String?
+      let code: String?
       let metadata: Metadata?
 
       struct Metadata: Decodable {
         let errorType: String?
+        let providerCode: String?
 
         private enum CodingKeys: String, CodingKey {
           case errorType = "error_type"
+          case providerCode = "provider_code"
         }
+      }
+
+      private enum CodingKeys: String, CodingKey {
+        case message, type, code, metadata
+      }
+
+      init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        message = try container.decode(String.self, forKey: .message)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        if let stringCode = try? container.decodeIfPresent(String.self, forKey: .code) {
+          code = stringCode
+        } else if let integerCode = try? container.decodeIfPresent(Int.self, forKey: .code) {
+          code = String(integerCode)
+        } else {
+          code = nil
+        }
+        metadata = try container.decodeIfPresent(Metadata.self, forKey: .metadata)
       }
     }
 

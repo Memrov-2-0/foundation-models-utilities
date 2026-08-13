@@ -18,10 +18,12 @@ import FoundationNetworking
 // letting us test the full ChatCompletionsLanguageModel pipeline without a network.
 final class MockSSEProtocol: URLProtocol, @unchecked Sendable {
   nonisolated(unsafe) static var handler: ((URLRequest) -> (statusCode: Int, data: Data))?
+  nonisolated(unsafe) static var responseHeaders = [String: String]()
   nonisolated(unsafe) static var lastRequest: URLRequest?
 
   static func reset() {
     handler = nil
+    responseHeaders = [:]
     lastRequest = nil
   }
 
@@ -55,7 +57,7 @@ final class MockSSEProtocol: URLProtocol, @unchecked Sendable {
       url: request.url!,
       statusCode: statusCode,
       httpVersion: "HTTP/1.1",
-      headerFields: ["Content-Type": "text/event-stream"],
+      headerFields: ["Content-Type": "text/event-stream"].merging(Self.responseHeaders) { _, new in new },
     )!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: data)
